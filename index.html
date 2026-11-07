@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="ru" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tribewalt</title>
+
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- React 18 & ReactDOM & Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Supabase JS Client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    body {
+      background-color: #0f172a;
+      color: #f8fafc;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .navbar {
+      background-color: #1e293b !important;
+      border-bottom: 1px solid #334155;
+    }
+    .card {
+      background-color: #1e293b;
+      border: 1px solid #334155;
+    }
+    .modal-content {
+      background-color: #1e293b;
+      border: 1px solid #475569;
+    }
+    .table {
+      --bs-table-bg: transparent;
+      --bs-table-color: #f8fafc;
+      --bs-table-border-color: #334155;
+    }
+    .form-control, .form-select, .input-group-text {
+      background-color: #0f172a;
+      border-color: #475569;
+      color: #f8fafc;
+    }
+    .form-control:focus, .form-select:focus {
+      background-color: #0f172a;
+      border-color: #3b82f6;
+      color: #f8fafc;
+      box-shadow: none;
+    }
+    .nav-pills .nav-link.active {
+      background-color: #2563eb;
+    }
+    .nav-pills .nav-link {
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+
+    const SUPABASE_URL = "https://mgtecdzysehvblsgjlkh.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_74oVvoq0SznBkXyXWRELng_RvcnTz0c";
+
+    const USERS = [
+      { id: "1", name: "Антон" },
+      { id: "2", name: "Руслана" },
+      { id: "3", name: "Максим" },
+      { id: "4", name: "Маша" },
+      { id: "5", name: "Лера" }
+    ];
+
+    const CATEGORIES = ["Жилье", "Продукты", "Транспорт", "Коммуналка", "Прочее"];
+
+    function App() {
+      const [transactions, setTransactions] = useState([]);
+      const [isCloudConnected, setIsCloudConnected] = useState(false);
+      const [activeTab, setActiveTab] = useState('overview');
+      const [filterUser, setFilterUser] = useState('all');
+      const [filterCategory, setFilterCategory] = useState('all');
+
+      const [txType, setTxType] = useState('shared');
+      const [payerId, setPayerId] = useState(USERS[0].id);
+      const [receiverId, setReceiverId] = useState(USERS[1].id);
+      const [amount, setAmount] = useState('');
+      const [paymentMethod, setPaymentMethod] = useState('card');
+      const [category, setCategory] = useState(CATEGORIES[0]);
+      const [description, setDescription] = useState('');
+      const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+      const [splitAmong, setSplitAmong] = useState(USERS.map(u => u.id));
+
+      useEffect(() => {
+        if (!SUPABASE_URL || !SUPABASE_KEY) return;
+
+        try {
+          const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+          
+          supabase.from('transactions').select('*').order('date', { ascending: false }).then(({ data, error }) => {
+            if (!error && data) {
+              const formatted = data.map(item => ({
+                id: item.id,
+                type: item.type,
+                payerId: item.payer_id,
+                receiverId: item.receiver_id,
+                amount: parseFloat(item.amount),
+                paymentMethod: item.payment_method,
+                category: item.category,
+                description: item.description,
+                date: item.date,
+                splitAmong: item.split_among
+              }));
+              setTransactions(formatted);
+              setIsCloudConnected(true);
+            } else {
+              console.error("Ошибка загрузки из Supabase:", error);
+            }
+          });
+
+          const channel = supabase.channel('public:transactions')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+              supabase.from('transactions').select('*').order('date', { ascending: false }).then(({ data }) => {
+                if (data) {
+                  const formatted = data.map(item => ({
+                    id: item.id,
+                    type: item.type,
+                    payerId: item.payer_id,
+                    receiverId: item.receiver_id,
+                    amount: parseFloat(item.amount),
+                    paymentMethod: item.payment_method,
+                    category: item.category,
+                    description: item.description,
+                    date: item.date,
+                    splitAmong: item.split_among
+                  }));
+                  setTransactions(formatted);
+                }
+              });
+            })
+            .subscribe();
+
+          return () => {
+            supabase.removeChannel(channel);
+          };
+        } catch (e) {
+          console.error("Ошибка инициализации Supabase:", e);
+        }
+      }, []);
+
+      useEffect(() => {
+        if (window.lucide) window.lucide.createIcons();
+      });
+
+      const handleAddTransaction = async (e) => {
+        e.preventDefault();
+        const parsedAmount = parseFloat(amount);
+
+        if (isNaN(parsedAmount) || parsedAmount <= 0) {
+          alert("Введите корректную сумму");
+          return;
+        }
+
+        if (txType === 'shared' && splitAmong.length === 0) {
+          alert("Выберите хотя бы одного участника для сплита");
+          return;
+        }
+
+        if (txType === 'transfer' && payerId === receiverId) {
+          alert("Нельзя перевести деньги самому себе");
+          return;
+        }
+
+        const newTx = {
+          id: Date.now().toString(),
+          type: txType,
+          payerId,
+          receiverId: txType === 'transfer' ? receiverId : null,
+          amount: parsedAmount,
+          paymentMethod,
+          category: txType === 'shared' ? category : 'Перевод',
+          description: description.trim() || (txType === 'shared' ? category : 'Прямой перевод'),
+          date,
+          splitAmong: txType === 'shared' ? splitAmong : []
+        };
+
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        const { error } = await supabase.from('transactions').insert([{
+          id: newTx.id,
+          type: newTx.type,
+          payer_id: newTx.payerId,
+          receiver_id: newTx.receiverId,
+          amount: newTx.amount,
+          payment_method: newTx.paymentMethod,
+          category: newTx.category,
+          description: newTx.description,
+          date: newTx.date,
+          split_among: newTx.splitAmong
+        }]);
+
+        if (error) {
+          alert("Ошибка сохранения в облако: " + error.message);
+          return;
+        }
+
+        const modalEl = document.getElementById('addExpenseModal');
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        if (modal) modal.hide();
+
+        setAmount('');
+        setDescription('');
+      };
+
+      const handleDeleteTransaction = async (id) => {
+        if (confirm("Удалить эту операцию?")) {
+          const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+          const { error } = await supabase.from('transactions').delete().eq('id', id);
+          if (error) {
+            alert("Ошибка удаления: " + error.message);
+          }
+        }
+      };
+
+      const { balances, totalSharedExpense, avgPerPerson, optimizedDebts } = useMemo(() => {
+        let totalShared = 0;
+        const userStats = USERS.reduce((acc, user) => {
+          acc[user.id] = {
+            id: user.id,
+            name: user.name,
+            spentOwn: 0,
+            shareInShared: 0,
+            transfersSent: 0,
+            transfersReceived: 0,
+            netBalance: 0
+          };
+          return acc;
+        }, {});
+
+        transactions.forEach(tx => {
+          const amt = tx.amount;
+          if (tx.type === 'shared') {
+            totalShared += amt;
+            if (userStats[tx.payerId]) userStats[tx.payerId].spentOwn += amt;
+            const splitShare = amt / tx.splitAmong.length;
+            tx.splitAmong.forEach(userId => {
+              if (userStats[userId]) userStats[userId].shareInShared += splitShare;
+            });
+          } else if (tx.type === 'transfer') {
+            if (userStats[tx.payerId]) userStats[tx.payerId].transfersSent += amt;
+            if (userStats[tx.receiverId]) userStats[tx.receiverId].transfersReceived += amt;
+          }
+        });
+
+        Object.values(userStats).forEach(u => {
+          u.netBalance = u.spentOwn - u.shareInShared - u.transfersReceived + u.transfersSent;
+        });
+
+        const debtors = [];
+        const creditors = [];
+
+        Object.values(userStats).forEach(u => {
+          const net = Math.round(u.netBalance * 100) / 100;
+          if (net < -0.01) debtors.push({ id: u.id, name: u.name, amount: -net });
+          else if (net > 0.01) creditors.push({ id: u.id, name: u.name, amount: net });
+        });
+
+        debtors.sort((a, b) => b.amount - a.amount);
+        creditors.sort((a, b) => b.amount - a.amount);
+
+        const settlements = [];
+        let i = 0, j = 0;
+
+        while (i < debtors.length && j < creditors.length) {
+          const debtor = debtors[i];
+          const creditor = creditors[j];
+          const amountToPay = Math.min(debtor.amount, creditor.amount);
+
+          settlements.push({
+            from: debtor.name,
+            to: creditor.name,
+            amount: amountToPay
+          });
+
+          debtor.amount -= amountToPay;
+          creditor.amount -= amountToPay;
+
+          if (debtor.amount < 0.01) i++;
+          if (creditor.amount < 0.01) j++;
+        }
+
+        return {
+          balances: Object.values(userStats),
+          totalSharedExpense: totalShared,
+          avgPerPerson: totalShared / USERS.length,
+          optimizedDebts: settlements
+        };
+      }, [transactions]);
+
+      const filteredTransactions = useMemo(() => {
+        return transactions.filter(t => {
+          const matchesUser = filterUser === 'all' || 
+            t.payerId === filterUser || 
+            t.receiverId === filterUser || 
+            (t.splitAmong && t.splitAmong.includes(filterUser));
+          const matchesCategory = filterCategory === 'all' || t.category === filterCategory;
+          return matchesUser && matchesCategory;
+        });
+      }, [transactions, filterUser, filterCategory]);
+
+      const handleExportJSON = () => {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(transactions, null, 2));
+        const dlAnchorElem = document.createElement('a');
+        dlAnchorElem.setAttribute("href", dataStr);
+        dlAnchorElem.setAttribute("download", `tribewalt_backup_${new Date().toISOString().split('T')[0]}.json`);
+        dlAnchorElem.click();
+      };
+
+      const handleImportJSON = (e) => {
+        const fileReader = new FileReader();
+        fileReader.onload = (event) => {
+          try {
+            const imported = JSON.parse(event.target.result);
+            if (Array.isArray(imported)) {
+              setTransactions(imported);
+              alert("Данные успешно импортированы!");
+            }
+          } catch (err) {
+            alert("Ошибка в формате JSON файла");
+          }
+        };
+        if (e.target.files[0]) fileReader.readAsText(e.target.files[0]);
+      };
+
+      return (
+        <div className="min-vh-100 d-flex flex-column">
+          <nav className="navbar sticky-top navbar-expand navbar-dark">
+            <div className="container-fluid px-3">
+              <span className="navbar-brand fw-bold mb-0 h1 d-flex align-items-center gap-2">
+                <i data-lucide="wallet" className="text-primary"></i> Tribewalt
+                <span className={`badge fs-6 ${isCloudConnected ? 'bg-success-subtle text-success border border-success' : 'bg-secondary-subtle text-secondary border border-secondary'}`}>
+                  {isCloudConnected ? '● БД подключена' : '○ Подключение...'}
+                </span>
+              </span>
+
+              <ul className="nav nav-pills me-auto ms-3">
+                <li className="nav-item">
+                  <button 
+                    className={`nav-link py-1 px-3 fs-6 ${activeTab === 'overview' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('overview')}
+                  >
+                    Сводка
+                  </button>
+                </li>
+                <li className="nav-item">
+                  <button 
+                    className={`nav-link py-1 px-3 fs-6 ${activeTab === 'history' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('history')}
+                  >
+                    История
+                  </button>
+                </li>
+              </ul>
+
+              <div className="d-flex align-items-center gap-2">
+                <button 
+                  className="btn btn-outline-secondary btn-sm"
+                  data-bs-toggle="modal" 
+                  data-bs-target="#settingsModal"
+                  title="Резервная копия"
+                >
+                  <i data-lucide="settings"></i>
+                </button>
+                <button 
+                  className="btn btn-primary btn-sm fw-semibold d-flex align-items-center gap-1"
+                  data-bs-toggle="modal" 
+                  data-bs-target="#addExpenseModal"
+                >
+                  <i data-lucide="plus"></i> <span className="d-none d-sm-inline">Внести трату</span>
+                </button>
+              </div>
+            </div>
+          </nav>
+
+          <div className="container-fluid px-3 py-4 flex-grow-1">
+            {activeTab === 'overview' && (
+              <div>
+                <div className="row g-3 mb-4">
+                  <div className="col-md-4">
+                    <div className="card p-3">
+                      <div className="text-secondary small fw-bold text-uppercase">Общие расходы группы</div>
+                      <div className="fs-3 fw-bold text-light mt-1">€{totalSharedExpense.toFixed(2)}</div>
+                    </div>
+                  </div>
+                  <div className="col-md-4">
+                    <div className="card p-3">
+                      <div className="text-secondary small fw-bold text-uppercase">Средний расход на 1 человека</div>
+                      <div className="fs-3 fw-bold text-light mt-1">€{avgPerPerson.toFixed(2)}</div>
+                    </div>
+                  </div>
+                  <div className="col-md-4">
+                    <div className="card p-3">
+                      <div className="text-secondary small fw-bold text-uppercase">Транзакций для расчета</div>
+                      <div className="fs-3 fw-bold text-info mt-1">{optimizedDebts.length} перевод(ов)</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="row g-3">
+                  <div className="col-lg-8">
+                    <div className="card h-100">
+                      <div className="card-header border-secondary bg-transparent fw-bold py-3">
+                        Балансы участников
+                      </div>
+                      <div className="card-body p-0">
+                        <div className="table-responsive">
+                          <table className="table align-middle mb-0">
+                            <thead>
+                              <tr className="text-secondary small">
+                                <th className="ps-3">Участник</th>
+                                <th>Внесено</th>
+                                <th>Доля</th>
+                                <th>Итоговый баланс</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {balances.map(u => (
+                                <tr key={u.id}>
+                                  <td className="ps-3 fw-semibold">{u.name}</td>
+                                  <td>€{u.spentOwn.toFixed(2)}</td>
+                                  <td>€{u.shareInShared.toFixed(2)}</td>
+                                  <td>
+                                    <span className={`badge fs-6 ${u.netBalance >= 0 ? 'bg-success-subtle text-success border border-success' : 'bg-danger-subtle text-danger border border-danger'}`}>
+                                      {u.netBalance >= 0 ? `+€${u.netBalance.toFixed(2)}` : `-€${Math.abs(u.netBalance).toFixed(2)}`}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="col-lg-4">
+                    <div className="card h-100">
+                      <div className="card-header border-secondary bg-transparent fw-bold py-3">
+                        Взаиморасчет
+                      </div>
+                      <div className="card-body">
+                        {optimizedDebts.length === 0 ? (
+                          <div className="text-secondary small text-center py-4">
+                            Все балансы сведены. Никто никому не должен.
+                          </div>
+                        ) : (
+                          <div className="d-flex flex-column gap-2">
+                            {optimizedDebts.map((item, idx) => (
+                              <div key={idx} className="p-3 border border-secondary rounded bg-dark-subtle d-flex justify-content-between align-items-center">
+                                <div>
+                                  <span className="fw-bold text-danger">{item.from}</span>
+                                  <i data-lucide="arrow-right" className="mx-2 text-secondary"></i>
+                                  <span className="fw-bold text-success">{item.to}</span>
+                                </div>
+                                <span className="badge bg-primary fs-6">€{item.amount.toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'history' && (
+              <div className="card">
+                <div className="card-header border-secondary bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-3">
+                  <div className="fw-bold">История транзакций ({filteredTransactions.length})</div>
+                  <div className="d-flex gap-2">
+                    <select 
+                      className="form-select form-select-sm" 
+                      style={{width: '160px'}}
+                      value={filterUser}
+                      onChange={e => setFilterUser(e.target.value)}
+                    >
+                      <option value="all">Все участники</option>
+                      {USERS.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
+
+                    <select 
+                      className="form-select form-select-sm" 
+                      style={{width: '160px'}}
+                      value={filterCategory}
+                      onChange={e => setFilterCategory(e.target.value)}
+                    >
+                      <option value="all">Все категории</option>
+                      {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="card-body p-0">
+                  <div className="table-responsive">
+                    <table className="table table-hover align-middle mb-0">
+                      <thead>
+                        <tr className="text-secondary small">
+                          <th className="ps-3">Дата</th>
+                          <th>Тип / Описание</th>
+                          <th>Кто платил</th>
+                          <th>Форма</th>
+                          <th>Детали / Сплит</th>
+                          <th className="text-end">Сумма</th>
+                          <th className="text-end pe-3">Действия</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredTransactions.length === 0 ? (
+                          <tr>
+                            <td colSpan="7" className="text-center py-4 text-secondary">Записей не найдено</td>
+                          </tr>
+                        ) : (
+                          filteredTransactions.map(tx => {
+                            const payer = USERS.find(u => u.id === tx.payerId)?.name || tx.payerId;
+                            const receiver = USERS.find(u => u.id === tx.receiverId)?.name;
+                            return (
+                              <tr key={tx.id}>
+                                <td className="ps-3 text-secondary small">{tx.date}</td>
+                                <td>
+                                  <span className="fw-semibold">{tx.description}</span>
+                                  <br/>
+                                  <span className="badge bg-secondary-subtle text-secondary small">{tx.category}</span>
+                                </td>
+                                <td className="fw-semibold">{payer}</td>
+                                <td>
+                                  <span className="badge bg-dark border border-secondary text-secondary">
+                                    {tx.paymentMethod === 'card' ? 'Карта' : 'Наличка'}
+                                  </span>
+                                </td>
+                                <td className="small text-secondary">
+                                  {tx.type === 'shared' ? (
+                                    `Делят (${tx.splitAmong.length}): ` + 
+                                    tx.splitAmong.map(id => USERS.find(u => u.id === id)?.name).join(', ')
+                                  ) : (
+                                    `Перевод для: ${receiver}`
+                                  )}
+                                </td>
+                                <td className="text-end fw-bold">€{tx.amount.toFixed(2)}</td>
+                                <td className="text-end pe-3">
+                                  <button 
+                                    className="btn btn-outline-danger btn-sm p-1"
+                                    onClick={() => handleDeleteTransaction(tx.id)}
+                                    title="Удалить"
+                                  >
+                                    <i data-lucide="trash-2"></i>
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="modal fade" id="addExpenseModal" tabIndex="-1">
+            <div className="modal-dialog modal-dialog-centered">
+              <div className="modal-content">
+                <form onSubmit={handleAddTransaction}>
+                  <div className="modal-header border-secondary">
+                    <h5 className="modal-title fw-bold">Новая операция</h5>
+                    <button type="button" className="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                  </div>
+                  <div className="modal-body">
+                    <div className="btn-group w-100 mb-3" role="group">
+                      <button 
+                        type="button" 
+                        className={`btn btn-sm ${txType === 'shared' ? 'btn-primary' : 'btn-outline-secondary'}`}
+                        onClick={() => setTxType('shared')}
+                      >
+                        Общий расход
+                      </button>
+                      <button 
+                        type="button" 
+                        className={`btn btn-sm ${txType === 'transfer' ? 'btn-primary' : 'btn-outline-secondary'}`}
+                        onClick={() => setTxType('transfer')}
+                      >
+                        Прямой перевод
+                      </button>
+                    </div>
+
+                    <div className="row g-2 mb-3">
+                      <div className="col-6">
+                        <label className="form-label small text-secondary">Кто платил</label>
+                        <select className="form-select form-select-sm" value={payerId} onChange={e => setPayerId(e.target.value)}>
+                          {USERS.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small text-secondary">Форма денег</label>
+                        <select className="form-select form-select-sm" value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+                          <option value="card">Карта</option>
+                          <option value="cash">Наличные</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {txType === 'transfer' && (
+                      <div className="mb-3">
+                        <label className="form-label small text-secondary">Кому перевел</label>
+                        <select className="form-select form-select-sm" value={receiverId} onChange={e => setReceiverId(e.target.value)}>
+                          {USERS.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                        </select>
+                      </div>
+                    )}
+
+                    <div className="row g-2 mb-3">
+                      <div className="col-6">
+                        <label className="form-label small text-secondary">Сумма (€)</label>
+                        <input 
+                          type="number" 
+                          step="0.01" 
+                          className="form-control form-control-sm" 
+                          placeholder="0.00" 
+                          required 
+                          value={amount}
+                          onChange={e => setAmount(e.target.value)}
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small text-secondary">Дата</label>
+                        <input 
+                          type="date" 
+                          className="form-control form-control-sm" 
+                          value={date}
+                          onChange={e => setDate(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {txType === 'shared' && (
+                      <div className="mb-3">
+                        <label className="form-label small text-secondary">Категория</label>
+                        <select className="form-select form-select-sm" value={category} onChange={e => setCategory(e.target.value)}>
+                          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                    )}
+
+                    <div className="mb-3">
+                      <label className="form-label small text-secondary">Примечание</label>
+                      <input 
+                        type="text" 
+                        className="form-control form-control-sm" 
+                        placeholder="Залог за квартиру, продукты и т.д." 
+                        value={description}
+                        onChange={e => setDescription(e.target.value)}
+                      />
+                    </div>
+
+                    {txType === 'shared' && (
+                      <div>
+                        <label className="form-label small text-secondary d-block">Делится между:</label>
+                        <div className="d-flex flex-wrap gap-2">
+                          {USERS.map(u => (
+                            <div key={u.id} className="form-check form-check-inline me-2">
+                              <input 
+                              className="form-check-input" 
+                                type="checkbox" 
+                                id={`user-chk-${u.id}`}
+                                checked={splitAmong.includes(u.id)}
+                                onChange={e => {
+                                  if (e.target.checked) setSplitAmong([...splitAmong, u.id]);
+                                  else setSplitAmong(splitAmong.filter(id => id !== u.id));
+                                }}
+                              />
+                              <label className="form-check-label small" htmlFor={`user-chk-${u.id}`}>{u.name}</label>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="modal-footer border-secondary">
+                    <button type="button" className="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" className="btn btn-sm btn-primary">Сохранить</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+
+          <div className="modal fade" id="settingsModal" tabIndex="-1">
+            <div className="modal-dialog modal-dialog-centered">
+              <div className="modal-content">
+                <div className="modal-header border-secondary">
+                  <h5 className="modal-title fw-bold">Резервная копия</h5>
+                  <button type="button" className="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div className="modal-body">
+                  <p className="small text-secondary mb-3">Подключение к облаку настроено автоматически. При необходимости вы можете скачать резервную копию базы.</p>
+                  <div className="d-flex gap-2">
+                    <button className="btn btn-outline-light btn-sm w-100" onClick={handleExportJSON}>
+                      Скачать резервную копию (.json)
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
